@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Variable Bandaid</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--figma-color-text);
+      background: var(--figma-color-bg);
+      font: 12px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 16px;
+    }
+
+    header {
+      display: grid;
+      gap: 4px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .subtitle,
+    .muted {
+      color: var(--figma-color-text-secondary);
+    }
+
+    .actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    button {
+      width: 100%;
+      min-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font: inherit;
+      font-weight: 600;
+      color: var(--figma-color-text);
+      background: var(--figma-color-bg-secondary);
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--figma-color-bg-hover);
+    }
+
+    button:active:not(:disabled) {
+      background: var(--figma-color-bg-pressed);
+    }
+
+    button.primary {
+      color: var(--figma-color-text-onbrand);
+      background: var(--figma-color-bg-brand);
+      border-color: var(--figma-color-border-brand);
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: var(--figma-color-bg-brand-hover);
+    }
+
+    button.primary:active:not(:disabled) {
+      background: var(--figma-color-bg-brand-pressed);
+    }
+
+    button:disabled {
+      color: var(--figma-color-text-disabled);
+      background: var(--figma-color-bg-disabled);
+      border-color: var(--figma-color-border-disabled);
+      cursor: default;
+    }
+
+    .panel {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 8px;
+      background: var(--figma-color-bg-secondary);
+    }
+
+    .loading-row {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      border: 2px solid var(--figma-color-border);
+      border-top-color: var(--figma-color-icon-brand);
+      border-radius: 999px;
+      animation: spin 900ms linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    progress {
+      width: 100%;
+      height: 6px;
+      accent-color: var(--figma-color-bg-brand);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      background: var(--figma-color-bg);
+    }
+
+    .stat-value {
+      display: block;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .stat-label {
+      display: block;
+      color: var(--figma-color-text-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .error {
+      border-color: var(--figma-color-border-danger);
+      background: var(--figma-color-bg-danger);
+      color: var(--figma-color-text-ondanger);
+    }
+
+    .warning {
+      border-color: var(--figma-color-border-warning);
+      background: var(--figma-color-bg-warning-tertiary);
+    }
+
+    .issue-list {
+      display: grid;
+      gap: 8px;
+      max-height: 210px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .issue {
+      display: grid;
+      gap: 3px;
+      padding: 8px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      background: var(--figma-color-bg);
+    }
+
+    .variable-list {
+      display: grid;
+      gap: 6px;
+      max-height: 190px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .variable-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+      padding: 7px 8px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      background: var(--figma-color-bg);
+    }
+
+    .variable-name {
+      min-width: 0;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .variable-meta {
+      color: var(--figma-color-text-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .count-pill {
+      align-self: start;
+      padding: 2px 6px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 999px;
+      color: var(--figma-color-text-secondary);
+      background: var(--figma-color-bg-secondary);
+      white-space: nowrap;
+    }
+
+    details {
+      display: grid;
+      gap: 8px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--figma-color-text);
+      font-weight: 650;
+    }
+
+    .issue-title {
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .issue-meta,
+    .issue-detail {
+      color: var(--figma-color-text-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Variable Bandaid</h1>
+      <p class="subtitle">Fix broken color variable bindings in components or selected frames.</p>
+    </header>
+
+    <section class="actions" aria-label="Actions">
+      <button id="fix-selection" class="primary" type="button">Fix selection</button>
+      <button id="fix-whole-file" type="button">Fix whole file</button>
+    </section>
+
+    <section id="progress-panel" class="panel hidden" aria-live="polite">
+      <div class="loading-row">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <h2 id="progress-title">Working...</h2>
+          <p id="progress-detail" class="muted">Preparing...</p>
+        </div>
+      </div>
+      <progress id="progress-bar" class="hidden" value="0" max="1"></progress>
+    </section>
+
+    <section id="error-panel" class="panel error hidden" aria-live="polite">
+      <h2>Could not run fix</h2>
+      <p id="error-message"></p>
+    </section>
+
+    <section id="result-panel" class="panel hidden" aria-live="polite">
+      <div>
+        <h2 id="result-title">Done</h2>
+        <p id="result-detail" class="muted"></p>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <span id="stat-components" class="stat-value">0</span>
+          <span class="stat-label">scanned roots</span>
+        </div>
+        <div class="stat">
+          <span id="stat-bindings" class="stat-value">0</span>
+          <span class="stat-label">bindings</span>
+        </div>
+        <div class="stat">
+          <span id="stat-fixed" class="stat-value">0</span>
+          <span class="stat-label">fixed</span>
+        </div>
+        <div class="stat">
+          <span id="stat-skipped" class="stat-value">0</span>
+          <span class="stat-label">needs review</span>
+        </div>
+      </div>
+
+      <div id="issues-panel" class="panel warning hidden">
+        <div>
+          <h2>Needs review</h2>
+          <p id="issues-summary" class="muted"></p>
+        </div>
+        <div id="variable-list" class="variable-list"></div>
+        <details id="issue-details">
+          <summary id="issue-details-summary">Show locations that need review</summary>
+          <div id="issue-list" class="issue-list"></div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const fixSelectionButton = document.getElementById('fix-selection');
+    const fixWholeFileButton = document.getElementById('fix-whole-file');
+    const progressPanel = document.getElementById('progress-panel');
+    const progressTitle = document.getElementById('progress-title');
+    const progressDetail = document.getElementById('progress-detail');
+    const progressBar = document.getElementById('progress-bar');
+    const errorPanel = document.getElementById('error-panel');
+    const errorMessage = document.getElementById('error-message');
+    const resultPanel = document.getElementById('result-panel');
+    const resultTitle = document.getElementById('result-title');
+    const resultDetail = document.getElementById('result-detail');
+    const statComponents = document.getElementById('stat-components');
+    const statBindings = document.getElementById('stat-bindings');
+    const statFixed = document.getElementById('stat-fixed');
+    const statSkipped = document.getElementById('stat-skipped');
+    const issuesPanel = document.getElementById('issues-panel');
+    const issuesSummary = document.getElementById('issues-summary');
+    const variableList = document.getElementById('variable-list');
+    const issueDetails = document.getElementById('issue-details');
+    const issueDetailsSummary = document.getElementById('issue-details-summary');
+    const issueList = document.getElementById('issue-list');
+
+    fixSelectionButton.addEventListener('click', () => runFix('fix-selection'));
+    fixWholeFileButton.addEventListener('click', () => runFix('fix-whole-file'));
+
+    window.onmessage = event => {
+      const msg = event.data.pluginMessage;
+
+      if (msg.type === 'progress') {
+        showProgress(msg);
+        return;
+      }
+
+      if (msg.type === 'fix-complete') {
+        showResult(msg);
+        return;
+      }
+
+      if (msg.type === 'error') {
+        showError(msg.message);
+      }
+    };
+
+    function runFix(type) {
+      setBusy(true);
+      hide(errorPanel);
+      hide(resultPanel);
+      show(progressPanel);
+      progressTitle.textContent = 'Starting...';
+      progressDetail.textContent = 'Preparing plugin run...';
+      hide(progressBar);
+      parent.postMessage({ pluginMessage: { type } }, '*');
+    }
+
+    function showProgress(msg) {
+      show(progressPanel);
+      hide(errorPanel);
+      progressTitle.textContent = msg.title || 'Working...';
+      progressDetail.textContent = msg.detail || '';
+
+      if (typeof msg.current === 'number' && typeof msg.total === 'number' && msg.total > 0) {
+        progressBar.max = msg.total;
+        progressBar.value = msg.current;
+        show(progressBar);
+      } else {
+        hide(progressBar);
+      }
+    }
+
+    function showResult(msg) {
+      const summary = msg.summary || {};
+      const issues = Array.isArray(msg.issues) ? msg.issues : [];
+
+      setBusy(false);
+      hide(progressPanel);
+      hide(errorPanel);
+      show(resultPanel);
+
+      resultTitle.textContent = msg.mode === 'whole-file' ? 'Whole file fixed' : 'Selection fixed';
+      const skippedBindings = (summary.skipped || 0) + (summary.failed || 0);
+      const uniqueVariables = groupIssuesByVariable(issues);
+      resultDetail.textContent = `${summary.alreadyLocal || 0} binding${summary.alreadyLocal === 1 ? '' : 's'} were already local. ${skippedBindings} binding${skippedBindings === 1 ? '' : 's'} need review across ${uniqueVariables.length} unique variable${uniqueVariables.length === 1 ? '' : 's'}.`;
+      statComponents.textContent = summary.componentsScanned || 0;
+      statBindings.textContent = summary.bindingsScanned || 0;
+      statFixed.textContent = summary.fixed || 0;
+      statSkipped.textContent = uniqueVariables.length;
+
+      renderIssues(issues, uniqueVariables);
+    }
+
+    function renderIssues(issues, uniqueVariables) {
+      variableList.innerHTML = '';
+      issueList.innerHTML = '';
+
+      if (issues.length === 0) {
+        hide(issuesPanel);
+        return;
+      }
+
+      issuesSummary.textContent = `${uniqueVariables.length} variable${uniqueVariables.length === 1 ? '' : 's'} could not be bound to local variables.`;
+
+      uniqueVariables.forEach(variable => {
+        const row = document.createElement('div');
+        row.className = 'variable-row';
+
+        const content = document.createElement('div');
+
+        const name = document.createElement('div');
+        name.className = 'variable-name';
+        name.textContent = variable.variableName;
+
+        const meta = document.createElement('div');
+        meta.className = 'variable-meta';
+        meta.textContent = variable.collectionName;
+
+        const count = document.createElement('div');
+        count.className = 'count-pill';
+        count.textContent = `${variable.issueCount} use${variable.issueCount === 1 ? '' : 's'}`;
+
+        content.appendChild(name);
+        content.appendChild(meta);
+        row.appendChild(content);
+        row.appendChild(count);
+        variableList.appendChild(row);
+      });
+
+      issueDetails.open = false;
+      issueDetailsSummary.textContent = `Show ${issues.length} location${issues.length === 1 ? '' : 's'} that need review`;
+
+      issues.forEach(issue => {
+        const item = document.createElement('div');
+        item.className = 'issue';
+
+        const title = document.createElement('div');
+        title.className = 'issue-title';
+        title.textContent = issue.variableName
+          ? `${issue.variableName} / ${issue.collectionName || 'Unknown collection'}`
+          : issue.variableId || 'Unresolved variable';
+
+        const meta = document.createElement('div');
+        meta.className = 'issue-meta';
+        const variant = issue.variantName ? ` / ${issue.variantName}` : '';
+        meta.textContent = `${issue.pageName} / ${issue.componentName}${variant} / ${issue.nodeName} / ${issue.field}`;
+
+        const detail = document.createElement('div');
+        detail.className = 'issue-detail';
+        detail.textContent = issue.detail || 'No detail available.';
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.appendChild(detail);
+        issueList.appendChild(item);
+      });
+
+      show(issuesPanel);
+    }
+
+    function groupIssuesByVariable(issues) {
+      const groups = new Map();
+
+      issues.forEach(issue => {
+        const variableName = issue.variableName || issue.variableId || 'Unresolved variable';
+        const collectionName = issue.collectionName || 'Unknown collection';
+        const key = `${issue.reason || 'issue'}::${variableName}::${collectionName}`;
+        const existing = groups.get(key);
+
+        if (existing) {
+          existing.issueCount += 1;
+          return;
+        }
+
+        groups.set(key, {
+          variableName,
+          collectionName,
+          issueCount: 1,
+        });
+      });
+
+      return Array.from(groups.values()).sort((a, b) => {
+        const collectionCompare = a.collectionName.localeCompare(b.collectionName);
+        if (collectionCompare !== 0) {
+          return collectionCompare;
+        }
+
+        return a.variableName.localeCompare(b.variableName);
+      });
+    }
+
+    function showError(message) {
+      setBusy(false);
+      hide(progressPanel);
+      hide(resultPanel);
+      errorMessage.textContent = message || 'Something went wrong.';
+      show(errorPanel);
+    }
+
+    function setBusy(isBusy) {
+      fixSelectionButton.disabled = isBusy;
+      fixWholeFileButton.disabled = isBusy;
+    }
+
+    function show(element) {
+      element.classList.remove('hidden');
+    }
+
+    function hide(element) {
+      element.classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
