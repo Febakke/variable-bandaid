@@ -281,8 +281,8 @@ async function scanNode(node, context, componentContext, options = {}) {
     }
     context.summary.nodesScanned++;
     if (node.type === 'INSTANCE') {
-        // Instances are scanned like other nodes in the MVP. Instance-specific
-        // override handling can be added here if testing shows we need it.
+        await scanInstanceOverrides(node, context, componentContext);
+        return;
     }
     await fixPaintBindings(node, context, componentContext, 'fills');
     await fixPaintBindings(node, context, componentContext, 'strokes');
@@ -291,6 +291,41 @@ async function scanNode(node, context, componentContext, options = {}) {
             await scanNode(child, context, componentContext, options);
         }
     }
+}
+async function scanInstanceOverrides(instance, context, componentContext) {
+    const colorOverrides = instance.overrides
+        .map(override => ({
+        id: override.id,
+        fields: getOverriddenPaintFields(override.overriddenFields),
+    }))
+        .filter(override => override.fields.length > 0);
+    console.log('[INSTANCE] Scanning color overrides only', {
+        name: instance.name,
+        id: instance.id,
+        overrideCount: instance.overrides.length,
+        colorOverrideCount: colorOverrides.length,
+        colorOverrides,
+    });
+    for (const override of colorOverrides) {
+        const node = await figma.getNodeByIdAsync(override.id);
+        if (!node || !isSceneNode(node)) {
+            continue;
+        }
+        context.summary.nodesScanned++;
+        for (const field of override.fields) {
+            await fixPaintBindings(node, context, componentContext, field);
+        }
+    }
+}
+function getOverriddenPaintFields(fields) {
+    const paintFields = [];
+    if (fields.includes('fills')) {
+        paintFields.push('fills');
+    }
+    if (fields.includes('strokes')) {
+        paintFields.push('strokes');
+    }
+    return paintFields;
 }
 async function fixPaintBindings(node, context, componentContext, field) {
     var _a, _b;
