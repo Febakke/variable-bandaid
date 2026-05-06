@@ -4,8 +4,10 @@ figma.showUI(__html__, {
     height: 560,
     themeColors: true,
 });
+const MAPPABLE_COLLECTION_NAMES = new Set(['main color', 'semantic', 'support color']);
 const variableCache = new Map();
 const collectionCache = new Map();
+let lastFixIssues = [];
 figma.ui.onmessage = async (msg) => {
     try {
         if (msg.type === 'fix-selection') {
@@ -14,6 +16,14 @@ figma.ui.onmessage = async (msg) => {
         }
         if (msg.type === 'fix-whole-file') {
             await fixWholeFile();
+            return;
+        }
+        if (msg.type === 'get-mapping-options') {
+            await sendMappingOptions();
+            return;
+        }
+        if (msg.type === 'apply-variable-mapping') {
+            await applyVariableMapping(msg.mappings);
         }
     }
     catch (error) {
@@ -49,11 +59,13 @@ async function fixSelection() {
     else {
         await fixComponentRoot(selectedNode, context);
     }
+    const issues = dedupeIssues(context.issues);
+    lastFixIssues = context.issues;
     postMessage({
         type: 'fix-complete',
         mode: 'selection',
         summary: context.summary,
-        issues: dedupeIssues(context.issues),
+        issues,
     });
 }
 async function fixWholeFile() {
@@ -79,11 +91,95 @@ async function fixWholeFile() {
             await new Promise(resolve => setTimeout(resolve, 0));
         }
     }
+    const issues = dedupeIssues(context.issues);
+    lastFixIssues = context.issues;
     postMessage({
         type: 'fix-complete',
         mode: 'whole-file',
         summary: context.summary,
-        issues: dedupeIssues(context.issues),
+        issues,
+    });
+}
+async function sendMappingOptions() {
+    var _a;
+    const localVariables = await figma.variables.getLocalVariablesAsync('COLOR');
+    const collections = new Map();
+    for (const variable of localVariables) {
+        const collection = await getCollectionByIdCached(variable.variableCollectionId);
+        if (!collection || !MAPPABLE_COLLECTION_NAMES.has(normalizeName(collection.name))) {
+            continue;
+        }
+        const existing = (_a = collections.get(collection.id)) !== null && _a !== void 0 ? _a : {
+            id: collection.id,
+            name: collection.name,
+            variables: [],
+        };
+        existing.variables.push({
+            id: variable.id,
+            name: variable.name,
+        });
+        collections.set(collection.id, existing);
+    }
+    const sortedCollections = Array.from(collections.values())
+        .map(collection => (Object.assign(Object.assign({}, collection), { variables: collection.variables.sort((a, b) => a.name.localeCompare(b.name)) })))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    postMessage({
+        type: 'mapping-options',
+        collections: sortedCollections,
+    });
+}
+async function applyVariableMapping(mappings) {
+    postProgress('Mapping variables', 'Applying selected variable mappings...');
+    const mappingBySourceId = new Map();
+    for (const mapping of mappings) {
+        if (mapping.sourceVariableId && mapping.targetVariableId) {
+            mappingBySourceId.set(mapping.sourceVariableId, mapping.targetVariableId);
+        }
+    }
+    let attempted = 0;
+    let fixed = 0;
+    const failures = [];
+    console.log('[MAPPING] Starting variable mapping', {
+        mappings: mappingBySourceId.size,
+        lastFixIssues: lastFixIssues.length,
+    });
+    for (const issue of lastFixIssues) {
+        const targetVariableId = mappingBySourceId.get(issue.variableId);
+        if (!targetVariableId) {
+            continue;
+        }
+        attempted++;
+        try {
+            const targetVariable = await getVariableByIdCached(targetVariableId);
+            if (!targetVariable) {
+                throw new Error(`Could not resolve target variable ${targetVariableId}.`);
+            }
+            const node = await figma.getNodeByIdAsync(issue.nodeId);
+            if (!node || !isSceneNode(node)) {
+                throw new Error(`Could not find node ${issue.nodeName}.`);
+            }
+            const binding = parsePaintBinding(issue);
+            applyPaintBinding(node, binding, targetVariable);
+            fixed++;
+        }
+        catch (error) {
+            failures.push(`${issue.componentName} / ${issue.nodeName} / ${issue.field}: ${error instanceof Error ? error.message : 'Could not apply mapping.'}`);
+        }
+    }
+    console.log('[MAPPING] Variable mapping complete', {
+        attempted,
+        fixed,
+        failed: failures.length,
+    });
+    postMessage({
+        type: 'mapping-complete',
+        summary: {
+            mappedVariables: mappingBySourceId.size,
+            attempted,
+            fixed,
+            failed: failures.length,
+        },
+        failures,
     });
 }
 async function createFixContext() {
@@ -330,6 +426,7 @@ async function getCollectionNames(variables) {
 }
 function getIssueBase(componentContext, node, binding) {
     return {
+        nodeId: node.id,
         componentName: componentContext.componentName,
         componentType: componentContext.componentType,
         pageName: componentContext.pageName,
@@ -338,6 +435,17 @@ function getIssueBase(componentContext, node, binding) {
         nodeType: node.type,
         field: `${binding.field}[${binding.index}]`,
         variableId: binding.variableId,
+    };
+}
+function parsePaintBinding(issue) {
+    const match = issue.field.match(/^(fills|strokes)\[(\d+)\]$/);
+    if (!match) {
+        throw new Error(`Unsupported field ${issue.field}.`);
+    }
+    return {
+        field: match[1],
+        index: Number(match[2]),
+        variableId: issue.variableId,
     };
 }
 function dedupeIssues(issues) {
@@ -383,6 +491,9 @@ function isComponentRoot(node) {
 }
 function isSelectionRoot(node) {
     return isComponentRoot(node) || node.type === 'FRAME';
+}
+function isSceneNode(node) {
+    return 'type' in node && node.type !== 'PAGE' && node.type !== 'DOCUMENT';
 }
 function isVariableAlias(value) {
     return (typeof value === 'object'

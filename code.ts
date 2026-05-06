@@ -6,7 +6,9 @@ figma.showUI(__html__, {
 
 type PluginMessage =
   | { type: 'fix-selection' }
-  | { type: 'fix-whole-file' };
+  | { type: 'fix-whole-file' }
+  | { type: 'get-mapping-options' }
+  | { type: 'apply-variable-mapping'; mappings: VariableMappingRequest[] };
 
 type ProgressMessage = {
   type: 'progress';
@@ -28,7 +30,39 @@ type ErrorMessage = {
   message: string;
 };
 
-type UiMessage = ProgressMessage | ResultMessage | ErrorMessage;
+type MappingVariableOption = {
+  id: string;
+  name: string;
+};
+
+type MappingCollectionOption = {
+  id: string;
+  name: string;
+  variables: MappingVariableOption[];
+};
+
+type MappingOptionsMessage = {
+  type: 'mapping-options';
+  collections: MappingCollectionOption[];
+};
+
+type MappingCompleteMessage = {
+  type: 'mapping-complete';
+  summary: {
+    mappedVariables: number;
+    attempted: number;
+    fixed: number;
+    failed: number;
+  };
+  failures: string[];
+};
+
+type UiMessage =
+  | ProgressMessage
+  | ResultMessage
+  | ErrorMessage
+  | MappingOptionsMessage
+  | MappingCompleteMessage;
 
 type ComponentRoot = ComponentNode | ComponentSetNode;
 type SelectionRoot = ComponentRoot | FrameNode;
@@ -66,6 +100,7 @@ type FixSummary = {
 
 type FixIssue = {
   reason: IssueReason;
+  nodeId: string;
   componentName: string;
   componentType: ScanRootType;
   pageName: string;
@@ -93,8 +128,15 @@ type PaintBinding = {
   variableId: string;
 };
 
+type VariableMappingRequest = {
+  sourceVariableId: string;
+  targetVariableId: string;
+};
+
+const MAPPABLE_COLLECTION_NAMES = new Set(['main color', 'semantic', 'support color']);
 const variableCache = new Map<string, Variable | null>();
 const collectionCache = new Map<string, VariableCollection | null>();
+let lastFixIssues: FixIssue[] = [];
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
   try {
@@ -105,6 +147,16 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
     if (msg.type === 'fix-whole-file') {
       await fixWholeFile();
+      return;
+    }
+
+    if (msg.type === 'get-mapping-options') {
+      await sendMappingOptions();
+      return;
+    }
+
+    if (msg.type === 'apply-variable-mapping') {
+      await applyVariableMapping(msg.mappings);
     }
   } catch (error) {
     postMessage({
@@ -144,11 +196,14 @@ async function fixSelection() {
     await fixComponentRoot(selectedNode, context);
   }
 
+  const issues = dedupeIssues(context.issues);
+  lastFixIssues = context.issues;
+
   postMessage({
     type: 'fix-complete',
     mode: 'selection',
     summary: context.summary,
-    issues: dedupeIssues(context.issues),
+    issues,
   });
 }
 
@@ -185,11 +240,118 @@ async function fixWholeFile() {
     }
   }
 
+  const issues = dedupeIssues(context.issues);
+  lastFixIssues = context.issues;
+
   postMessage({
     type: 'fix-complete',
     mode: 'whole-file',
     summary: context.summary,
-    issues: dedupeIssues(context.issues),
+    issues,
+  });
+}
+
+async function sendMappingOptions() {
+  const localVariables = await figma.variables.getLocalVariablesAsync('COLOR');
+  const collections = new Map<string, MappingCollectionOption>();
+
+  for (const variable of localVariables) {
+    const collection = await getCollectionByIdCached(variable.variableCollectionId);
+    if (!collection || !MAPPABLE_COLLECTION_NAMES.has(normalizeName(collection.name))) {
+      continue;
+    }
+
+    const existing = collections.get(collection.id) ?? {
+      id: collection.id,
+      name: collection.name,
+      variables: [],
+    };
+
+    existing.variables.push({
+      id: variable.id,
+      name: variable.name,
+    });
+    collections.set(collection.id, existing);
+  }
+
+  const sortedCollections = Array.from(collections.values())
+    .map(collection => ({
+      ...collection,
+      variables: collection.variables.sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  postMessage({
+    type: 'mapping-options',
+    collections: sortedCollections,
+  });
+}
+
+async function applyVariableMapping(mappings: VariableMappingRequest[]) {
+  postProgress('Mapping variables', 'Applying selected variable mappings...');
+
+  const mappingBySourceId = new Map<string, string>();
+  for (const mapping of mappings) {
+    if (mapping.sourceVariableId && mapping.targetVariableId) {
+      mappingBySourceId.set(mapping.sourceVariableId, mapping.targetVariableId);
+    }
+  }
+
+  let attempted = 0;
+  let fixed = 0;
+  const failures: string[] = [];
+
+  console.log('[MAPPING] Starting variable mapping', {
+    mappings: mappingBySourceId.size,
+    lastFixIssues: lastFixIssues.length,
+  });
+
+  for (const issue of lastFixIssues) {
+    const targetVariableId = mappingBySourceId.get(issue.variableId);
+    if (!targetVariableId) {
+      continue;
+    }
+
+    attempted++;
+
+    try {
+      const targetVariable = await getVariableByIdCached(targetVariableId);
+      if (!targetVariable) {
+        throw new Error(`Could not resolve target variable ${targetVariableId}.`);
+      }
+
+      const node = await figma.getNodeByIdAsync(issue.nodeId);
+      if (!node || !isSceneNode(node)) {
+        throw new Error(`Could not find node ${issue.nodeName}.`);
+      }
+
+      const binding = parsePaintBinding(issue);
+      applyPaintBinding(node, binding, targetVariable);
+      fixed++;
+    } catch (error) {
+      failures.push(
+        `${issue.componentName} / ${issue.nodeName} / ${issue.field}: ${
+          error instanceof Error ? error.message : 'Could not apply mapping.'
+        }`,
+      );
+    }
+  }
+
+  console.log('[MAPPING] Variable mapping complete', {
+    attempted,
+    fixed,
+    failed: failures.length,
+  });
+
+  postMessage({
+    type: 'mapping-complete',
+    summary: {
+      mappedVariables: mappingBySourceId.size,
+      attempted,
+      fixed,
+      failed: failures.length,
+    },
+    failures,
   });
 }
 
@@ -543,6 +705,7 @@ function getIssueBase(
   binding: PaintBinding,
 ): Omit<FixIssue, 'reason' | 'detail'> {
   return {
+    nodeId: node.id,
     componentName: componentContext.componentName,
     componentType: componentContext.componentType,
     pageName: componentContext.pageName,
@@ -551,6 +714,19 @@ function getIssueBase(
     nodeType: node.type,
     field: `${binding.field}[${binding.index}]`,
     variableId: binding.variableId,
+  };
+}
+
+function parsePaintBinding(issue: FixIssue): PaintBinding {
+  const match = issue.field.match(/^(fills|strokes)\[(\d+)\]$/);
+  if (!match) {
+    throw new Error(`Unsupported field ${issue.field}.`);
+  }
+
+  return {
+    field: match[1] as PaintField,
+    index: Number(match[2]),
+    variableId: issue.variableId,
   };
 }
 
@@ -606,6 +782,10 @@ function isComponentRoot(node: BaseNode): node is ComponentRoot {
 
 function isSelectionRoot(node: BaseNode): node is SelectionRoot {
   return isComponentRoot(node) || node.type === 'FRAME';
+}
+
+function isSceneNode(node: BaseNode): node is SceneNode {
+  return 'type' in node && node.type !== 'PAGE' && node.type !== 'DOCUMENT';
 }
 
 function isVariableAlias(value: unknown): value is VariableAlias {

@@ -73,6 +73,17 @@
       cursor: pointer;
     }
 
+    select {
+      width: 100%;
+      min-height: 32px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font: inherit;
+      color: var(--figma-color-text);
+      background: var(--figma-color-bg);
+    }
+
     button:hover:not(:disabled) {
       background: var(--figma-color-bg-hover);
     }
@@ -220,6 +231,34 @@
       overflow-wrap: anywhere;
     }
 
+    .mapping-list {
+      display: grid;
+      gap: 10px;
+      max-height: 300px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .mapping-row {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--figma-color-border);
+      border-radius: 6px;
+      background: var(--figma-color-bg);
+    }
+
+    .mapping-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+      gap: 8px;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+    }
+
     .variable-meta {
       color: var(--figma-color-text-secondary);
       overflow-wrap: anywhere;
@@ -321,10 +360,23 @@
           <p id="issues-summary" class="muted"></p>
         </div>
         <div id="variable-list" class="variable-list"></div>
+        <button id="start-mapping" class="primary hidden" type="button">Map variables</button>
         <details id="issue-details">
           <summary id="issue-details-summary">Show locations that need review</summary>
           <div id="issue-list" class="issue-list"></div>
         </details>
+      </div>
+    </section>
+
+    <section id="mapping-panel" class="panel hidden" aria-live="polite">
+      <div>
+        <h2>Map missing variables</h2>
+        <p id="mapping-summary" class="muted"></p>
+      </div>
+      <div id="mapping-list" class="mapping-list"></div>
+      <div class="button-row">
+        <button id="back-to-results" type="button">Back</button>
+        <button id="apply-mapping" class="primary" type="button" disabled>Apply mapping</button>
       </div>
     </section>
   </main>
@@ -348,12 +400,28 @@
     const issuesPanel = document.getElementById('issues-panel');
     const issuesSummary = document.getElementById('issues-summary');
     const variableList = document.getElementById('variable-list');
+    const startMappingButton = document.getElementById('start-mapping');
     const issueDetails = document.getElementById('issue-details');
     const issueDetailsSummary = document.getElementById('issue-details-summary');
     const issueList = document.getElementById('issue-list');
+    const mappingPanel = document.getElementById('mapping-panel');
+    const mappingSummary = document.getElementById('mapping-summary');
+    const mappingList = document.getElementById('mapping-list');
+    const backToResultsButton = document.getElementById('back-to-results');
+    const applyMappingButton = document.getElementById('apply-mapping');
+
+    let lastIssues = [];
+    let lastUniqueVariables = [];
+    let mappingCollections = [];
 
     fixSelectionButton.addEventListener('click', () => runFix('fix-selection'));
     fixWholeFileButton.addEventListener('click', () => runFix('fix-whole-file'));
+    startMappingButton.addEventListener('click', startMapping);
+    backToResultsButton.addEventListener('click', () => {
+      hide(mappingPanel);
+      show(resultPanel);
+    });
+    applyMappingButton.addEventListener('click', applyMapping);
 
     window.onmessage = event => {
       const msg = event.data.pluginMessage;
@@ -368,6 +436,16 @@
         return;
       }
 
+      if (msg.type === 'mapping-options') {
+        showMappingFlow(msg.collections || []);
+        return;
+      }
+
+      if (msg.type === 'mapping-complete') {
+        showMappingComplete(msg);
+        return;
+      }
+
       if (msg.type === 'error') {
         showError(msg.message);
       }
@@ -377,6 +455,7 @@
       setBusy(true);
       hide(errorPanel);
       hide(resultPanel);
+      hide(mappingPanel);
       show(progressPanel);
       progressTitle.textContent = 'Starting...';
       progressDetail.textContent = 'Preparing plugin run...';
@@ -402,15 +481,18 @@
     function showResult(msg) {
       const summary = msg.summary || {};
       const issues = Array.isArray(msg.issues) ? msg.issues : [];
+      lastIssues = issues;
 
       setBusy(false);
       hide(progressPanel);
       hide(errorPanel);
+      hide(mappingPanel);
       show(resultPanel);
 
       resultTitle.textContent = msg.mode === 'whole-file' ? 'Whole file fixed' : 'Selection fixed';
       const skippedBindings = (summary.skipped || 0) + (summary.failed || 0);
       const uniqueVariables = groupIssuesByVariable(issues);
+      lastUniqueVariables = uniqueVariables;
       resultDetail.textContent = `${summary.alreadyLocal || 0} binding${summary.alreadyLocal === 1 ? '' : 's'} were already local. ${skippedBindings} binding${skippedBindings === 1 ? '' : 's'} need review across ${uniqueVariables.length} unique variable${uniqueVariables.length === 1 ? '' : 's'}.`;
       statComponents.textContent = summary.componentsScanned || 0;
       statBindings.textContent = summary.bindingsScanned || 0;
@@ -423,6 +505,7 @@
     function renderIssues(issues, uniqueVariables) {
       variableList.innerHTML = '';
       issueList.innerHTML = '';
+      hide(startMappingButton);
 
       if (issues.length === 0) {
         hide(issuesPanel);
@@ -456,6 +539,8 @@
         variableList.appendChild(row);
       });
 
+      show(startMappingButton);
+
       issueDetails.open = false;
       issueDetailsSummary.textContent = `Show ${issues.length} location${issues.length === 1 ? '' : 's'} that need review`;
 
@@ -487,13 +572,182 @@
       show(issuesPanel);
     }
 
+    function startMapping() {
+      setBusy(true);
+      hide(resultPanel);
+      show(progressPanel);
+      progressTitle.textContent = 'Preparing mapping';
+      progressDetail.textContent = 'Loading local color variables...';
+      hide(progressBar);
+      parent.postMessage({ pluginMessage: { type: 'get-mapping-options' } }, '*');
+    }
+
+    function showMappingFlow(collections) {
+      setBusy(false);
+      hide(progressPanel);
+      hide(errorPanel);
+      hide(resultPanel);
+      show(mappingPanel);
+
+      mappingCollections = collections;
+      mappingList.innerHTML = '';
+      mappingSummary.textContent = `Choose replacement variables for ${lastUniqueVariables.length} source variable${lastUniqueVariables.length === 1 ? '' : 's'}. Only local color variables from Main color, Semantic, and Support color are shown.`;
+
+      if (collections.length === 0) {
+        mappingSummary.textContent = 'No local color variables were found in Main color, Semantic, or Support color.';
+        applyMappingButton.disabled = true;
+        return;
+      }
+
+      lastUniqueVariables.forEach(sourceVariable => {
+        const row = document.createElement('div');
+        row.className = 'mapping-row';
+        row.dataset.sourceVariableId = sourceVariable.variableId;
+
+        const title = document.createElement('div');
+        title.className = 'variable-name';
+        title.textContent = sourceVariable.variableName;
+
+        const meta = document.createElement('div');
+        meta.className = 'variable-meta';
+        meta.textContent = `From ${sourceVariable.collectionName}`;
+
+        const controls = document.createElement('div');
+        controls.className = 'mapping-controls';
+
+        const collectionSelect = document.createElement('select');
+        collectionSelect.dataset.role = 'collection';
+        appendOption(collectionSelect, '', 'Choose collection');
+
+        collections.forEach(collection => {
+          appendOption(collectionSelect, collection.id, collection.name);
+        });
+
+        const variableSelect = document.createElement('select');
+        variableSelect.dataset.role = 'variable';
+        variableSelect.disabled = true;
+        appendOption(variableSelect, '', 'Choose variable');
+
+        collectionSelect.addEventListener('change', () => {
+          renderVariableOptions(collectionSelect, variableSelect);
+          updateApplyMappingState();
+        });
+        variableSelect.addEventListener('change', updateApplyMappingState);
+
+        controls.appendChild(collectionSelect);
+        controls.appendChild(variableSelect);
+        row.appendChild(title);
+        row.appendChild(meta);
+        row.appendChild(controls);
+        mappingList.appendChild(row);
+      });
+
+      updateApplyMappingState();
+    }
+
+    function renderVariableOptions(collectionSelect, variableSelect) {
+      const collection = mappingCollections.find(item => item.id === collectionSelect.value);
+      variableSelect.innerHTML = '';
+      appendOption(variableSelect, '', 'Choose variable');
+
+      if (!collection) {
+        variableSelect.disabled = true;
+        return;
+      }
+
+      collection.variables.forEach(variable => {
+        appendOption(variableSelect, variable.id, variable.name);
+      });
+      variableSelect.disabled = false;
+    }
+
+    function updateApplyMappingState() {
+      applyMappingButton.disabled = getSelectedMappings().length === 0;
+    }
+
+    function getSelectedMappings() {
+      return Array.from(mappingList.querySelectorAll('.mapping-row'))
+        .map(row => {
+          const variableSelect = row.querySelector('select[data-role="variable"]');
+          return {
+            sourceVariableId: row.dataset.sourceVariableId,
+            targetVariableId: variableSelect ? variableSelect.value : '',
+          };
+        })
+        .filter(mapping => mapping.sourceVariableId && mapping.targetVariableId);
+    }
+
+    function applyMapping() {
+      const mappings = getSelectedMappings();
+      if (mappings.length === 0) {
+        return;
+      }
+
+      setBusy(true);
+      hide(mappingPanel);
+      show(progressPanel);
+      progressTitle.textContent = 'Applying mapping';
+      progressDetail.textContent = `Applying ${mappings.length} variable mapping${mappings.length === 1 ? '' : 's'}...`;
+      hide(progressBar);
+      parent.postMessage({ pluginMessage: { type: 'apply-variable-mapping', mappings } }, '*');
+    }
+
+    function showMappingComplete(msg) {
+      const summary = msg.summary || {};
+      const failures = Array.isArray(msg.failures) ? msg.failures : [];
+
+      setBusy(false);
+      hide(progressPanel);
+      hide(errorPanel);
+      show(resultPanel);
+      hide(mappingPanel);
+
+      resultTitle.textContent = 'Mapping applied';
+      resultDetail.textContent = `Mapped ${summary.mappedVariables || 0} variable${summary.mappedVariables === 1 ? '' : 's'}. Fixed ${summary.fixed || 0}/${summary.attempted || 0} location${summary.attempted === 1 ? '' : 's'}.`;
+      statComponents.textContent = summary.mappedVariables || 0;
+      statBindings.textContent = summary.attempted || 0;
+      statFixed.textContent = summary.fixed || 0;
+      statSkipped.textContent = summary.failed || 0;
+
+      if (failures.length > 0) {
+        issuesSummary.textContent = `${failures.length} location${failures.length === 1 ? '' : 's'} could not be mapped.`;
+        variableList.innerHTML = '';
+        issueList.innerHTML = '';
+        hide(startMappingButton);
+        issueDetails.open = true;
+        issueDetailsSummary.textContent = `Show ${failures.length} mapping failure${failures.length === 1 ? '' : 's'}`;
+
+        failures.forEach(failure => {
+          const item = document.createElement('div');
+          item.className = 'issue';
+          const detail = document.createElement('div');
+          detail.className = 'issue-detail';
+          detail.textContent = failure;
+          item.appendChild(detail);
+          issueList.appendChild(item);
+        });
+
+        show(issuesPanel);
+      } else {
+        hide(issuesPanel);
+      }
+    }
+
+    function appendOption(select, value, label) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+
     function groupIssuesByVariable(issues) {
       const groups = new Map();
 
       issues.forEach(issue => {
         const variableName = issue.variableName || issue.variableId || 'Unresolved variable';
         const collectionName = issue.collectionName || 'Unknown collection';
-        const key = `${issue.reason || 'issue'}::${variableName}::${collectionName}`;
+        const variableId = issue.variableId || `${variableName}::${collectionName}`;
+        const key = `${issue.reason || 'issue'}::${variableId}`;
         const existing = groups.get(key);
 
         if (existing) {
@@ -502,6 +756,7 @@
         }
 
         groups.set(key, {
+          variableId,
           variableName,
           collectionName,
           issueCount: 1,
